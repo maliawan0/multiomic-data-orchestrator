@@ -63,8 +63,8 @@ DATABASE_NAME = os.getenv("DATABASE_NAME", "mdo")
 client = AsyncIOMotorClient(MONGODB_URI)
 db = client.get_database(DATABASE_NAME)
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - Using Argon2 (no password length limit, more secure than bcrypt)
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # ============== Schema Templates with Validation Rules ==============
 
@@ -307,35 +307,23 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def hash_password(password: str) -> str:
     """
-    Hash a password using bcrypt.
-    Note: bcrypt has a 72-byte limit. This should be validated before calling this function.
+    Hash a password using Argon2.
+    Argon2 has no password length limit and is more secure than bcrypt.
     """
-    # Safety check: ensure password doesn't exceed bcrypt's 72-byte limit
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) > 72:
-        raise ValueError("Password exceeds bcrypt's 72-byte limit. This should have been caught during validation.")
-    
-    try:
-        return pwd_context.hash(password)
-    except ValueError as e:
-        # Catch bcrypt's own 72-byte limit error as a fallback
-        if "cannot be longer than 72 bytes" in str(e):
-            raise ValueError("Password exceeds bcrypt's 72-byte limit. Please use a shorter password.")
-        raise
+    return pwd_context.hash(password)
 
 def validate_password(password: str) -> Tuple[bool, Optional[str]]:
     """
     Validate password strength.
     Returns (is_valid, error_message)
-    Note: bcrypt has a 72-byte limit, so we enforce that limit here.
+    Note: Argon2 has no password length limit, but we enforce reasonable limits for security.
     """
     if len(password) < 8:
         return False, "Password must be at least 8 characters long"
     
-    # Check byte length (bcrypt limitation: max 72 bytes)
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) > 72:
-        return False, "Password is too long (maximum 72 bytes). Please use a shorter password."
+    # Reasonable upper limit (not a technical limitation, just good practice)
+    if len(password) > 128:
+        return False, "Password is too long (maximum 128 characters). Please use a shorter password."
     
     # Check for at least one letter and one number
     has_letter = any(c.isalpha() for c in password)
@@ -466,14 +454,7 @@ async def signup(request: SignUpRequest = Body(...)):
         )
     
     # Create new user
-    try:
-        password_hash = hash_password(request.password)
-    except ValueError as e:
-        # Catch bcrypt 72-byte limit error if validation somehow missed it
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password is too long (maximum 72 bytes). Please use a shorter password.",
-        )
+    password_hash = hash_password(request.password)
     
     user_doc = {
         "email": request.email,
